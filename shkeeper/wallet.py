@@ -306,6 +306,11 @@ def parts_transactions():
             Invoice.external_id.contains(request.args["external_id"])
         )
 
+    if "member_id" in request.args:
+        query = query.join(Invoice).filter(
+            Invoice.member_id.contains(request.args["member_id"])
+        )
+
     if "from_date" in request.args:
         query = query.filter(
             Transaction.created_at >= f"{request.args['from_date']} 00:00:00",
@@ -328,6 +333,7 @@ def parts_transactions():
                         "Status",
                         "Date",
                         "External ID",
+                        "Member ID",
                         "Invoice Coin",
                         "Invoice $",
                         "Invoice Date",
@@ -349,6 +355,7 @@ def parts_transactions():
                                 "",
                                 "",
                                 "",
+                                "",
                             ]
                         )
                     else:
@@ -362,6 +369,7 @@ def parts_transactions():
                                 r.invoice.status.name,
                                 r.created_at,
                                 r.invoice.external_id,
+                                r.invoice.member_id,
                                 r.invoice.amount_crypto,
                                 r.invoice.amount_fiat,
                                 r.invoice.created_at,
