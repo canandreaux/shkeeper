@@ -340,6 +340,7 @@ class Invoice(db.Model):
     crypto = db.Column(db.String)
     addr = db.Column(db.String)
     external_id = db.Column(db.String)
+    member_id = db.Column(db.String(512))
     fiat = db.Column(db.String)
     callback_url = db.Column(db.String)
     balance_fiat = db.Column(db.Numeric, default=0)
@@ -362,6 +363,7 @@ class Invoice(db.Model):
                 for tx in (*self.transactions, *self.unconfirmed_transactions)
             ],
             "external_id": self.external_id,
+            "member_id": self.member_id,
             "balance_fiat": remove_exponent(self.balance_fiat),
             "fiat": self.fiat,
             "amount_fiat": remove_exponent(self.amount_fiat),
@@ -412,92 +414,95 @@ class Invoice(db.Model):
         return self
 
     @classmethod
+    def find_latest_by_address(cls, crypto_name, addr):
+        invoice = (
+            cls.query.join(InvoiceAddress)
+            .filter(
+                InvoiceAddress.crypto == crypto_name,
+                InvoiceAddress.addr == addr,
+                cls.status != InvoiceStatus.OUTGOING,
+            )
+            .order_by(cls.id.desc())
+            .first()
+        )
+        if invoice:
+            return invoice
+
+        # Compatibility path for databases created before InvoiceAddress existed.
+        return (
+            cls.query.filter(
+                cls.addr == addr,
+                cls.status != InvoiceStatus.OUTGOING,
+            )
+            .order_by(cls.id.desc())
+            .first()
+        )
+
+    @classmethod
+    def find_reusable_address(cls, member_id, crypto_name):
+        invoice_address = (
+            InvoiceAddress.query.join(cls)
+            .filter(
+                cls.member_id == member_id,
+                InvoiceAddress.crypto == crypto_name,
+                cls.status != InvoiceStatus.OUTGOING,
+            )
+            .order_by(cls.id.desc())
+            .first()
+        )
+        return invoice_address.addr if invoice_address else None
+
+    @classmethod
     def add(cls, crypto, request):
         # {"external_id": "1234",  "fiat": "USD", "amount": 100.90, "callback_url": "https://blabla/callback.php"}
         crypto_is_lightning = "BTC-LIGHTNING" == crypto.crypto
-        invoice = cls.query.filter_by(
-            external_id=request["external_id"],
-            callback_url=request["callback_url"],
-            fiat=request["fiat"],
-        ).first()
-        if invoice:
-            # updating existing invoice
-            invoice.fiat = request["fiat"]
-            invoice.amount_fiat = Decimal(request["amount"])
+        invoice = cls()
+        invoice.crypto = crypto.crypto
+        invoice.external_id = request["external_id"]
+        invoice.member_id = request["member_id"]
+        invoice.callback_url = request["callback_url"]
+        invoice.fiat = request["fiat"]
+        invoice.amount_fiat = Decimal(request["amount"])
+        rate = ExchangeRate.get(invoice.fiat, invoice.crypto)
+        invoice.amount_crypto, invoice.exchange_rate = rate.convert(
+            invoice.amount_fiat
+        )
 
-            # recalc crypto amount for the new fiat amount
-            rate = ExchangeRate.get(invoice.fiat, invoice.crypto)
-            invoice.amount_crypto, invoice.exchange_rate = rate.convert(
-                invoice.amount_fiat
+        reusable_addr = None
+        if not crypto_is_lightning:
+            reusable_addr = cls.find_reusable_address(
+                invoice.member_id, invoice.crypto
             )
-
-            crypto_changed = invoice.crypto != crypto.crypto
-            if crypto_changed or crypto_is_lightning:
-                invoice.crypto = crypto.crypto
-
-                # recalc crypto amount for the new crypto and fiat amount
-                rate = ExchangeRate.get(invoice.fiat, invoice.crypto)
-                invoice.amount_crypto, invoice.exchange_rate = rate.convert(
-                    invoice.amount_fiat
-                )
-
-                # if address for new crypto already exist, use it instead of generating a new one
-                invoice_address = InvoiceAddress.query.filter_by(
-                    invoice_id=invoice.id, crypto=crypto.crypto
-                ).first()
-                if invoice_address and not crypto_is_lightning:
-                    invoice.addr = invoice_address.addr
-                else:
-                    invoice.addr = crypto.mkaddr(
-                        details={"value": invoice.amount_crypto}
-                    )
-                    db.session.commit()
-                    invoice_address = InvoiceAddress()
-                    invoice_address.invoice_id = invoice.id
-                    invoice_address.crypto = invoice.crypto
-                    invoice_address.addr = invoice.addr
-                    db.session.add(invoice_address)
-
+        if reusable_addr:
+            invoice.addr = reusable_addr
         else:
-            # creating new invoice
-            invoice = cls()
-            invoice.crypto = crypto.crypto
-            invoice.external_id = request["external_id"]
-            invoice.callback_url = request["callback_url"]
-            invoice.fiat = request["fiat"]
-            invoice.amount_fiat = Decimal(request["amount"])
-            rate = ExchangeRate.get(invoice.fiat, invoice.crypto)
-            invoice.amount_crypto, invoice.exchange_rate = rate.convert(
-                invoice.amount_fiat
-            )
             invoice.addr = crypto.mkaddr(details={"value": invoice.amount_crypto})
-            db.session.add(invoice)
-            db.session.commit()
+        db.session.add(invoice)
+        db.session.commit()
 
-            invoice_address = InvoiceAddress()
-            invoice_address.invoice_id = invoice.id
-            invoice_address.crypto = invoice.crypto
-            invoice_address.addr = invoice.addr
-            db.session.add(invoice_address)
+        invoice_address = InvoiceAddress()
+        invoice_address.invoice_id = invoice.id
+        invoice_address.crypto = invoice.crypto
+        invoice_address.addr = invoice.addr
+        db.session.add(invoice_address)
 
         if crypto_is_lightning and crypto.LIGHTNING_GENERATE_ONCHAIN_ADDRESS:
             app.logger.debug("Lightning requested on-chain address...")
             btc = Crypto.instances.get("BTC")
 
             if btc:
-                btc_address = InvoiceAddress.query.filter_by(
-                    invoice_id=invoice.id, crypto="BTC"
-                ).first()
-
-                if btc_address:
-                    app.logger.debug("Using already existing on-chain BTC address")
+                reusable_btc_addr = cls.find_reusable_address(
+                    invoice.member_id, "BTC"
+                )
+                btc_address = InvoiceAddress()
+                btc_address.crypto = "BTC"
+                btc_address.invoice_id = invoice.id
+                if reusable_btc_addr:
+                    btc_address.addr = reusable_btc_addr
                 else:
                     app.logger.debug("Generating a new on-chain BTC address")
-                    btc_address = InvoiceAddress()
-                    btc_address.crypto = "BTC"
                     btc_address.addr = btc.mkaddr()
-                    btc_address.invoice_id = invoice.id
-                    db.session.add(btc_address)
+                db.session.add(btc_address)
             else:
                 raise Exception(
                     "Lightning requested on-chain address generation but BTC wallet is not enabled in configuration"
@@ -560,15 +565,7 @@ class UnconfirmedTransaction(db.Model):
             f"Add unconfirmed transaction {txid} for {amount} {crypto_name} -> {addr}"
         )
 
-        invoice_address = InvoiceAddress.query.filter_by(
-            crypto=crypto_name, addr=addr
-        ).first()
-        if not invoice_address:
-            # Check address in Invoice table in case the instance was upgraded from older version that does not have InvoiceAddress table
-            invoice = Invoice.query.filter_by(addr=addr).first()
-        else:
-            invoice = Invoice.query.filter_by(id=invoice_address.invoice_id).first()
-
+        invoice = Invoice.find_latest_by_address(crypto_name, addr)
         if not invoice:
             raise NotRelatedToAnyInvoice(f"{addr} is not related to any invoice")
 
@@ -666,16 +663,7 @@ class Transaction(db.Model):
 
     @classmethod
     def add(cls, crypto, tx):
-        invoice_address = InvoiceAddress.query.filter_by(addr=tx["addr"]).first()
-
-        if not invoice_address:
-            # Check address in Invoice table in case the instance was upgraded from older version that does not have InvoiceAddress table
-            invoice = Invoice.query.filter(
-                Invoice.addr == tx["addr"], Invoice.status != InvoiceStatus.OUTGOING
-            ).first()
-        else:
-            invoice = Invoice.query.filter_by(id=invoice_address.invoice_id).first()
-
+        invoice = Invoice.find_latest_by_address(crypto.crypto, tx["addr"])
         if not invoice:
             raise NotRelatedToAnyInvoice(f"{tx['addr']} is not related to any invoice")
 

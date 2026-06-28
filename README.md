@@ -448,6 +448,7 @@ SHKeeper uses a short-lived in-memory TTL cache to speed up the /crypto endpoint
 ```
 {
     "external_id":<order_id>,
+    "member_id":<member_id>,
     "fiat":"USD",
     "amount":"<order_amount>",
     "callback_url":"<callback_script_url>"
@@ -455,17 +456,18 @@ SHKeeper uses a short-lived in-memory TTL cache to speed up the /crypto endpoint
 ```
 
 - `external_id`: A unique order_id or invoice_id from your store.
+- `member_id`: A unique member or customer ID from your store. SHKeeper reuses the same wallet address for the same `member_id` and cryptocurrency.
 - `fiat`: Currency code in ISO 4217 format for conversion. `USD` and `EUR` are enabled by default; additional currencies can be enabled with `EXTRA_CURRENCIES`.
 - `amount`: The amount for which the invoice should be created in SHKeeper.
 - `callback_url`: The URL to which SHKeeper will send notifications in the event of transactions related to the created invoices.
 
-SHKeeper uses pair  `external_id` and `callback_url` as invoice identificator and update invoice in case repeating it on the next invoice creation requests.
+SHKeeper creates a new invoice for each `external_id`. For repeated requests with the same `member_id` and cryptocurrency, SHKeeper reuses the member's latest wallet address.
 **Example Curl request:**
 ```
 curl --location --request POST 'https://demo.shkeeper.io/api/v1/ETH/payment_request' \
 --header 'X-Shkeeper-API-Key: nApijGv8djih7ozY' \
 --header 'Content-Type: application/json' \
---data-raw '{"external_id":107,"fiat":"USD","amount":"18.25","callback_url":"https://my-billing/callback.php"}'
+--data-raw '{"external_id":107,"member_id":"member_123","fiat":"USD","amount":"18.25","callback_url":"https://my-billing/callback.php"}'
 ```
 **Success Example Response:**
 ```
@@ -1137,6 +1139,7 @@ SHKeeper will send a notification for each transaction related to the invoice, e
 ```
 {
   "external_id": "1",  // Invoice or Order ID in the external system
+  "member_id": "member_123", // Member or customer ID in the external system
   "crypto": "BTC",  // cryptocurrency (provided during payment request creation)
   "addr": "AAAAAAAAAAAAAA", // wallet address that receives payments
   "fiat":   "USD",  // fiat currency (provided during payment request creation)
@@ -1173,6 +1176,7 @@ SHKeeper will send a notification for each transaction related to the invoice, e
 ```
 {
   "external_id": "147",
+  "member_id": "member_123",
   "crypto": "ETH-USDT",
   "addr": "0x6f2Fc9D7205B7D9037dDE45B5f9e12B18EA07e27",
   "fiat": "USD",

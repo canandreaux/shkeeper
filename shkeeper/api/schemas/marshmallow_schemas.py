@@ -80,6 +80,9 @@ class PaymentCallbackSchema(Schema):
     external_id = fields.String(
         description="Invoice or order ID in external system", example="147"
     )
+    member_id = fields.String(
+        description="Member ID in merchant system", example="member_123456"
+    )
     crypto = fields.String(description="Cryptocurrency used", example="ETH-USDT")
     addr = fields.String(
         description="Wallet address that received the payment",
@@ -114,9 +117,14 @@ class PayoutCallbackSchema(Schema):
 
 class PaymentRequestSchema(Schema):
     external_id = fields.String(
-        required=False,
+        required=True,
         example="order_123456",
         description="External order ID in merchant system",
+    )
+    member_id = fields.String(
+        required=True,
+        example="member_123456",
+        description="Member ID used to reuse wallet addresses",
     )
     fiat = fields.String(
         required=True, example="USD", description="Fiat currency code (ISO 4217)"

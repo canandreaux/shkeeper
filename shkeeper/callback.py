@@ -1,5 +1,6 @@
 import click
 from apscheduler.schedulers import SchedulerNotRunningError
+from concurrent.futures import ThreadPoolExecutor
 
 from shkeeper import requests
 
@@ -16,6 +17,49 @@ bp = Blueprint("callback", __name__)
 # bp_callback = SmorestBlueprint("callback", __name__)
 
 DEFAULT_CURRENCY = 'USD'
+CALLBACK_EXECUTOR = ThreadPoolExecutor(max_workers=8)
+
+
+def is_callback_accepted(response):
+    return response.status_code in (200, 202)
+
+
+def send_notification_async(tx):
+    app_obj = app._get_current_object()
+    CALLBACK_EXECUTOR.submit(_send_notification_by_id, app_obj, tx.id)
+
+
+def send_unconfirmed_notification_async(utx):
+    app_obj = app._get_current_object()
+    CALLBACK_EXECUTOR.submit(_send_unconfirmed_notification_by_id, app_obj, utx.id)
+
+
+def _send_notification_by_id(app_obj, tx_id):
+    with app_obj.app_context():
+        try:
+            tx = Transaction.query.get(tx_id)
+            if not tx or tx.callback_confirmed or tx.need_more_confirmations:
+                return
+            send_notification(tx)
+        except Exception:
+            app_obj.logger.exception(f"Exception while sending async callback for TX id={tx_id}")
+        finally:
+            db.session.remove()
+
+
+def _send_unconfirmed_notification_by_id(app_obj, utx_id):
+    with app_obj.app_context():
+        try:
+            utx = UnconfirmedTransaction.query.get(utx_id)
+            if not utx or utx.callback_confirmed:
+                return
+            send_unconfirmed_notification(utx)
+        except Exception:
+            app_obj.logger.exception(
+                f"Exception while sending async callback for UTX id={utx_id}"
+            )
+        finally:
+            db.session.remove()
 
 
 def send_unconfirmed_notification(utx: UnconfirmedTransaction):
@@ -23,16 +67,14 @@ def send_unconfirmed_notification(utx: UnconfirmedTransaction):
         f"send_unconfirmed_notification started for {utx.crypto} {utx.txid}, {utx.addr}, {utx.amount_crypto}"
     )
 
-    invoice_address = InvoiceAddress.query.filter_by(
-        crypto=utx.crypto, addr=utx.addr
-    ).first()
-    invoice = Invoice.query.filter_by(id=invoice_address.invoice_id).first()
+    invoice = utx.invoice
     crypto = Crypto.instances[utx.crypto]
     apikey = crypto.wallet.apikey
 
     notification = {
         "status": "unconfirmed",
         "external_id": invoice.external_id,
+        "member_id": invoice.member_id,
         "crypto": utx.crypto,
         "addr": utx.addr,
         "txid": utx.txid,
@@ -60,7 +102,7 @@ def send_unconfirmed_notification(utx: UnconfirmedTransaction):
         )
         return False
 
-    if r.status_code != 202:
+    if not is_callback_accepted(r):
         app.logger.warning(
             f"[{utx.crypto}/{utx.txid}] Unconfirmed TX notification failed with HTTP code {r.status_code}"
         )
@@ -96,6 +138,7 @@ def send_notification(tx):
 
     notification = {
         "external_id": tx.invoice.external_id,
+        "member_id": tx.invoice.member_id,
         "crypto": tx.invoice.crypto,
         "addr": tx.invoice.addr,
         "fiat": tx.invoice.fiat,
@@ -140,7 +183,7 @@ def send_notification(tx):
         app.logger.error(f"[{tx.crypto}/{tx.txid}] Notification failed: {e}")
         return False
 
-    if r.status_code != 202:
+    if not is_callback_accepted(r):
         app.logger.warning(
             f"[{tx.crypto}/{tx.txid}] Notification failed by {tx.invoice.callback_url} with HTTP code {r.status_code}"
         )
@@ -325,7 +368,7 @@ def send_payout_notification(notif: Notification):
         db.session.commit()
         return False
 
-    if r.status_code != 202:
+    if not is_callback_accepted(r):
         notif.message = f"{r.status_code} {r.reason}"
         notif.retries = retries + 1
         db.session.commit()
