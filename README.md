@@ -1133,7 +1133,7 @@ HMAC_SHA256(api_key, "{timestamp}." + raw_request_body)
 
 If a payment notification is successfully processed by your server, it should return the HTTP code `202 Accepted`. Any other response or connection failure will cause SHKeeper to resend the payment notification every 60 seconds.
 
-SHKeeper will send a notification for each transaction related to the invoice, even if the invoice is already in the PAID/OVERPAID status. The transaction that triggered the callback is marked with the `trigger` field.
+SHKeeper will send a notification for each transaction related to the invoice, even if the invoice is already in the PAID/OVERPAID status. The `transactions` array contains only the transaction that triggered the callback.
 
 **Structure of the Callback Object:**
 ```
@@ -1150,21 +1150,13 @@ SHKeeper will send a notification for each transaction related to the invoice, e
   "status": "PAID",  // PARTIAL - partial invoice payment
                               // PAID - full invoice payment
                               // OVERPAID - overpaid invoice payment
-  "transactions": [  // list of transactions related to the payment request
+  "transactions": [  // transaction that triggered this callback
     {
       "txid": "ZZZZZZZZZZZZZZZZZZZ",  // blockchain transaction ID
       "date": "2022-04-01 11:22:33",  // transaction date
       "amount_crypto": "0.0025",      // transaction amount in cryptocurrency
       "amount_fiat": "50",           // transaction amount in fiat currency
-      "trigger": false,  // true if this transaction was the trigger for the payment notification
-      "crypto": "ETH-USDT" // transaction cryptocurrency
-    },
-    {
-      "txid": "CCCCCCCCCCCC",  // blockchain transaction ID
-      "date": "2022-04-01 11:42:33",  // transaction date
-      "amount_crypto": "0.0025",      // transaction amount in cryptocurrency
-      "amount_fiat": "50",           // transaction amount in fiat currency
-      "trigger": true,  // true if this transaction was the trigger for the payment notification
+      "trigger": true,  // always true for the included transaction
       "crypto": "ETH-USDT" // transaction cryptocurrency
     }
   ],
