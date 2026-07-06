@@ -16,4 +16,3 @@ build/
 *.db
 celerybeat-schedule
 data/
-.git
