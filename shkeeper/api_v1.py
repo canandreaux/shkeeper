@@ -28,7 +28,7 @@ from shkeeper.modules.classes.ethereum import Ethereum
 from shkeeper.modules.cryptos.bitcoin_lightning import BitcoinLightning
 from shkeeper.modules.cryptos.monero import Monero
 from shkeeper.models import *
-from shkeeper.callback import send_notification, send_unconfirmed_notification
+from shkeeper.callback import send_notification_async, send_unconfirmed_notification_async
 from shkeeper.utils import format_decimal
 from shkeeper.wallet_encryption import (
     wallet_encryption,
@@ -130,6 +130,16 @@ def payment_request(crypto_name):
             }
 
         req = request.get_json(force=True)
+        missing_fields = [
+            field
+            for field in ("external_id", "member_id", "fiat", "amount", "callback_url")
+            if not req.get(field)
+        ]
+        if missing_fields:
+            return {
+                "status": "error",
+                "message": f"Missing required fields: {', '.join(missing_fields)}",
+            }, 400
         invoice = Invoice.add(crypto=crypto, request=req)
         response = {
             "status": "success",
@@ -519,7 +529,7 @@ def walletnotify(crypto_name, txid):
                         utx = UnconfirmedTransaction.add(
                             crypto_name, txid, addr, amount
                         )
-                        send_unconfirmed_notification(utx)
+                        send_unconfirmed_notification_async(utx)
 
                     continue
 
@@ -536,7 +546,7 @@ def walletnotify(crypto_name, txid):
                 UnconfirmedTransaction.delete(crypto_name, txid)
                 app.logger.info(f"[{crypto.crypto}/{txid}] TX has been added to db")
                 if not tx.need_more_confirmations:
-                    send_notification(tx)
+                    send_notification_async(tx)
             except sqlalchemy.exc.IntegrityError as e:
                 app.logger.warning(f"[{crypto.crypto}/{txid}] TX already exist in db")
                 db.session.rollback()

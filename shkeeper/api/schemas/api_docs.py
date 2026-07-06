@@ -126,7 +126,8 @@ payment_request_doc = {
                 "'https://demo.shkeeper.io/api/v1/ETH/payment_request' \\\n"
                 "--header 'X-Shkeeper-API-Key: YOUR_API_KEY' \\\n"
                 "--header 'Content-Type: application/json' \\\n"
-                '--data-raw \'{"external_id":107,"fiat":"USD","amount":"18.25",'
+                '--data-raw \'{"external_id":107,"member_id":"member_123",'
+                '"fiat":"USD","amount":"18.25",'
                 '"callback_url":"https://my-billing/callback.php"}\'\n'
             ),
         }
