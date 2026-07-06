@@ -195,7 +195,7 @@ metrics_doc = {
 transaction_callback_doc = {
     "description": (
         "SHKeeper sends payment notifications for invoice-related transactions.\n\n"
-        "Each transaction is sent individually, and the transaction that triggered the callback has `trigger = true`.\n"
+        "Each transaction is sent individually, and the `transactions` array contains only the transaction that triggered the callback.\n"
         "Your server should respond with HTTP 202 if successfully processed."
     ),
     "tags": ["Notifications"],
