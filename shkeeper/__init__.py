@@ -82,6 +82,8 @@ def create_app(test_config=None):
         REQUESTS_NOTIFICATION_TIMEOUT=int(
             os.environ.get("REQUESTS_NOTIFICATION_TIMEOUT", 30)
         ),
+        CALLBACK_VERIFY_SSL=os.environ.get("CALLBACK_VERIFY_SSL", "false").lower()
+        in ("1", "true", "yes", "on"),
         DEV_MODE=bool(os.environ.get("DEV_MODE", False)),
         DEV_MODE_ENC_PW=os.environ.get("DEV_MODE_ENC_PW"),
         ENABLE_PAYOUT_CALLBACK=bool(os.environ.get("ENABLE_PAYOUT_CALLBACK")),

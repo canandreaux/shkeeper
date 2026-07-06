@@ -24,6 +24,10 @@ def is_callback_accepted(response):
     return response.status_code in (200, 202)
 
 
+def callback_ssl_verify():
+    return app.config.get("CALLBACK_VERIFY_SSL", False)
+
+
 def send_notification_async(tx):
     app_obj = app._get_current_object()
     CALLBACK_EXECUTOR.submit(_send_notification_by_id, app_obj, tx.id)
@@ -95,6 +99,7 @@ def send_unconfirmed_notification(utx: UnconfirmedTransaction):
                 **shkeeper_webhook_auth_headers(apikey, body),
             },
             timeout=app.config.get("REQUESTS_NOTIFICATION_TIMEOUT"),
+            verify=callback_ssl_verify(),
         )
     except Exception as e:
         app.logger.error(
@@ -176,6 +181,7 @@ def send_notification(tx):
                 **shkeeper_webhook_auth_headers(apikey, body),
             },
             timeout=app.config.get("REQUESTS_NOTIFICATION_TIMEOUT"),
+            verify=callback_ssl_verify(),
         )
     except Exception as e:
         app.logger.error(f"[{tx.crypto}/{tx.txid}] Notification failed: {e}")
@@ -359,6 +365,7 @@ def send_payout_notification(notif: Notification):
             data=body,
             headers=headers,
             timeout=app.config.get("REQUESTS_NOTIFICATION_TIMEOUT", 10),
+            verify=callback_ssl_verify(),
         )
     except Exception as e:
         notif.message = str(e)
