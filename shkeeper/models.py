@@ -331,6 +331,8 @@ class InvoiceStatus(enum.Enum):
 
 
 class Invoice(db.Model):
+    __table_args__ = (db.UniqueConstraint("external_id"),)
+
     id = db.Column(db.Integer, primary_key=True)
     transactions = db.relationship("Transaction", backref="invoice", lazy=True)
     unconfirmed_transactions = db.relationship(
