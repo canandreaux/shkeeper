@@ -120,21 +120,19 @@ def send_unconfirmed_notification(utx: UnconfirmedTransaction):
 def send_notification(tx):
     app.logger.info(f"[{tx.crypto}/{tx.txid}] Notificator started")
 
-    transactions = []
-    for t in tx.invoice.transactions:
-        amount_fiat_without_fee = t.rate.get_orig_amount(t.amount_fiat)
-        transactions.append(
-            {
-                "txid": t.txid,
-                "date": str(t.created_at),
-                "amount_crypto": remove_exponent(t.amount_crypto),
-                "amount_fiat": remove_exponent(t.amount_fiat),
-                "amount_fiat_without_fee": remove_exponent(amount_fiat_without_fee),
-                "fee_fiat": remove_exponent(t.amount_fiat - amount_fiat_without_fee),
-                "trigger": tx.id == t.id,
-                "crypto": t.crypto,
-            }
-        )
+    amount_fiat_without_fee = tx.rate.get_orig_amount(tx.amount_fiat)
+    transactions = [
+        {
+            "txid": tx.txid,
+            "date": str(tx.created_at),
+            "amount_crypto": remove_exponent(tx.amount_crypto),
+            "amount_fiat": remove_exponent(tx.amount_fiat),
+            "amount_fiat_without_fee": remove_exponent(amount_fiat_without_fee),
+            "fee_fiat": remove_exponent(tx.amount_fiat - amount_fiat_without_fee),
+            "trigger": True,
+            "crypto": tx.crypto,
+        }
+    ]
 
     notification = {
         "external_id": tx.invoice.external_id,
