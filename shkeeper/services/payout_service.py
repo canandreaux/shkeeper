@@ -3,8 +3,9 @@ from decimal import Decimal
 from urllib.parse import urlparse
 from flask import current_app as app
 from shkeeper import db
-from shkeeper.models import Payout
+from shkeeper.models import Payout, PayoutStatus
 from shkeeper.modules.classes.crypto import Crypto
+
 
 class PayoutService:
     @staticmethod
@@ -49,6 +50,19 @@ class PayoutService:
             external_id=req.get("external_id")
         )
 
+    @staticmethod
+    def _mark_reserved_failed(payouts, error):
+        if not payouts:
+            return
+        message = Payout._format_mkpayout_error(error)
+        if message is None:
+            message = str(error)
+        for payout in payouts:
+            payout.status = PayoutStatus.FAIL
+            payout.success = "No"
+            payout.error = message
+        db.session.commit()
+
     @classmethod
     def single_payout(cls, crypto_name, req):
         app.logger.info(f"[single_payout] Started for crypto={crypto_name} destination={req.get('destination')} amount={req.get('amount')} external_id={req.get('external_id')}")
@@ -75,6 +89,15 @@ class PayoutService:
             app.logger.error(f"[single_payout] Invalid callback_url={callback_url!r}: {e}")
             raise
 
+        try:
+            payout = cls.create_payout_record(req, crypto_name, task_id=None)
+            app.logger.info(
+                f"[single_payout] Reserved payout_id={payout.id} external_id={req.get('external_id')}"
+            )
+        except Exception as e:
+            app.logger.error(f"[single_payout] Failed to reserve payout record: {e}")
+            raise
+
         app.logger.info(f"[single_payout] Calling mkpayout: destination={req['destination']} amount={req['amount']} fee={req['fee']}")
         try:
             res = crypto.mkpayout(
@@ -84,29 +107,18 @@ class PayoutService:
             )
         except Exception as e:
             app.logger.error(f"[single_payout] mkpayout failed: {e}")
+            cls._mark_reserved_failed([payout], e)
             raise
 
-        task_id = res.get("task_id")
-        txids = res.get("result", [])
-        app.logger.info(f"[single_payout] mkpayout response: task_id={task_id} txids={txids} full_response={res}")
+        app.logger.info(f"[single_payout] mkpayout response: {res}")
+        payout.apply_mkpayout_response(res)
 
-        if not task_id:
-            app.logger.warning(f"[single_payout] No task_id returned from mkpayout — payout will rely on txid-based confirmation only")
-
-        if not txids:
-            app.logger.warning(f"[single_payout] No txids in mkpayout result — PayoutTx will be empty until task resolves")
-
-        try:
-            payout = cls.create_payout_record(req, crypto_name, task_id=task_id, txids=txids)
-            app.logger.info(f"[single_payout] Payout record created: payout_id={payout.id} task_id={task_id} txids={txids}")
-        except Exception as e:
-            app.logger.error(f"[single_payout] Failed to create payout record: {e}")
-            raise
-
-        if req.get("external_id"):
+        if req.get("external_id") and isinstance(res, dict):
             res["external_id"] = req["external_id"]
 
-        app.logger.info(f"[single_payout] Completed successfully: payout_id={payout.id} external_id={res.get('external_id')} task_id={task_id}")
+        app.logger.info(
+            f"[single_payout] Completed: payout_id={payout.id if payout else None} res={res}"
+        )
         return res
 
     @classmethod
@@ -114,19 +126,57 @@ class PayoutService:
         if not isinstance(payout_list, list):
             raise ValueError("Expected an array of payouts")
 
-        crypto = cls.get_crypto(crypto_name)
-        res = crypto.multipayout(payout_list)
-        task_id = res.get("task_id")
-
-        created_ids = []
+        seen = set()
         for req in payout_list:
-            cls.check_external_id_unique(req, crypto_name)
-            cls.validate_callback_url(req.get("callback_url"))
-            payout = cls.create_payout_record(req, crypto_name, task_id=task_id)
-            created_ids.append(payout.id)
-        res["external_ids"] = [
-            req.get("external_id")
-            for req in payout_list
-            if req.get("external_id")
-        ]
+            external_id = req.get("external_id")
+            if not external_id:
+                continue
+            if external_id in seen:
+                raise ValueError(f"Duplicate external_id in payout batch: {external_id}")
+            seen.add(external_id)
+
+        crypto = cls.get_crypto(crypto_name)
+
+        reserved = []
+        try:
+            for req in payout_list:
+                cls.check_external_id_unique(req, crypto_name)
+                reserved.append(cls.create_payout_record(req, crypto_name, task_id=None))
+        except Exception:
+            if reserved:
+                for payout in reserved:
+                    db.session.delete(payout)
+                db.session.commit()
+            raise
+
+        try:
+            res = crypto.multipayout(payout_list)
+        except Exception as e:
+            cls._mark_reserved_failed(reserved, e)
+            raise
+
+        error = None
+        if isinstance(res, dict):
+            err = res.get("error")
+            if err:
+                error = err
+            elif res.get("status") == "error":
+                error = res.get("message") or res
+        elif isinstance(res, str):
+            error = res
+
+        if error is not None:
+            cls._mark_reserved_failed(reserved, error)
+        else:
+            task_id = res.get("task_id") if isinstance(res, dict) else None
+            if task_id:
+                for payout in reserved:
+                    payout.task_id = task_id
+                db.session.commit()
+        if isinstance(res, dict):
+            res["external_ids"] = [
+                req.get("external_id")
+                for req in payout_list
+                if req.get("external_id")
+            ]
         return res
