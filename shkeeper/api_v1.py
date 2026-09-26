@@ -1,4 +1,5 @@
 import traceback
+from decimal import Decimal
 from os import environ
 from concurrent.futures import ThreadPoolExecutor
 from operator import itemgetter
@@ -519,6 +520,17 @@ def walletnotify(crypto_name, txid):
                 if category == "send":
                     Transaction.add_outgoing(crypto, txid)
                     continue
+
+                if crypto_name in ("TRX", "USDT"):
+                    minimum = Decimal(str(app.config.get(
+                        f"{crypto_name}_MIN_INCOMING_AMOUNT", "0.1"
+                    )))
+                    if Decimal(str(amount)) < minimum:
+                        app.logger.info(
+                            f"[{crypto_name}/{txid}] Ignoring incoming payment "
+                            f"to {addr}: {amount} is below minimum {minimum}"
+                        )
+                        continue
 
                 if confirmations == 0:
                     app.logger.info(
