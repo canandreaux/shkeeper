@@ -1,6 +1,7 @@
 import click
 from apscheduler.schedulers import SchedulerNotRunningError
 from concurrent.futures import ThreadPoolExecutor
+from sqlalchemy.exc import IntegrityError
 
 from shkeeper import requests
 
@@ -294,12 +295,44 @@ def poll_unconfirmed_payouts():
                 db.session.add(notification)
     db.session.commit()
 
+def queue_failed_payout_notifications():
+    if not app.config.get("ENABLE_PAYOUT_CALLBACK"):
+        return
+    payouts = Payout.query.filter(
+        Payout.status == PayoutStatus.FAIL,
+        Payout.callback_url.isnot(None),
+        Payout.callback_url != "",
+        ~db.session.query(Notification.id).filter(
+            Notification.type == "Payout",
+            Notification.object_id == Payout.id,
+        ).exists(),
+    ).all()
+    for payout in payouts:
+        # The unique (type, object_id) constraint also protects concurrent scans.
+        try:
+            with db.session.begin_nested():
+                db.session.add(Notification(
+                    type="Payout",
+                    object_id=payout.id,
+                    crypto=payout.crypto,
+                    amount_crypto=payout.amount,
+                    callback_url=payout.callback_url,
+                ))
+        except IntegrityError:
+            continue
+    db.session.commit()
+
+
 def send_payout_callback_notifier():
+    if not app.config.get("ENABLE_PAYOUT_CALLBACK"):
+        return
+    queue_failed_payout_notifications()
     max_retries = app.config.get("REQUESTS_NOTIFICATION_RETRIES", 10)
     now = datetime.utcnow()
     notifs = Notification.query.filter(
         Notification.retries < max_retries,
-        Notification.callback_confirmed == False
+        Notification.callback_confirmed == False,
+        Notification.type == "Payout",
     ).all()
     for notif in notifs:
         retries = notif.retries or 0
@@ -323,30 +356,40 @@ def send_payout_callback_notifier():
             app.logger.exception(f"Exception while sending payout callback object_id={notif.object_id}")
 
 def send_payout_notification(notif: Notification):
+    if notif.callback_confirmed:
+        return True
     payout = Payout.query.get(notif.object_id)
     if not payout:
         notif.message = "Payout not found"
         db.session.commit()
         return False
 
+    if payout.status not in (PayoutStatus.SUCCESS, PayoutStatus.FAIL):
+        return False
+    failed = payout.status == PayoutStatus.FAIL
     tx = payout.transactions[0] if payout.transactions else None
     tx_hash = tx.txid if tx else None
-    if not tx_hash:
+    if not tx_hash and not failed:
         app.logger.info(f"[PAYOUT {payout.id}] No tx_hash yet — skipping callback")
         return False
-    rate = ExchangeRate.get(DEFAULT_CURRENCY, payout.crypto).get_rate()
-    amount_fiat = payout.amount * rate
+    # A rate-provider outage must not prevent reporting a failed withdrawal.
+    amount_fiat = None
+    if not failed:
+        rate = ExchangeRate.get(DEFAULT_CURRENCY, payout.crypto).get_rate()
+        amount_fiat = str(payout.amount * rate)
     payload = {
         "payout_id": payout.id,
         "external_id": payout.external_id,
         "tx_hash": tx_hash,
-        "status": "SUCCESS",
+        "status": "FAIL" if failed else "SUCCESS",
         "amount": str(payout.amount),
         "crypto": payout.crypto,
-        "amount_fiat": str(amount_fiat),
+        "amount_fiat": amount_fiat,
         "currency_fiat": DEFAULT_CURRENCY,
         "timestamp": payout.created_at.isoformat(),
     }
+    if failed:
+        payload["error"] = payout.error
 
     crypto = Crypto.instances.get(payout.crypto)
     apikey = crypto.wallet.apikey if crypto and crypto.wallet else ""
@@ -369,13 +412,11 @@ def send_payout_notification(notif: Notification):
         )
     except Exception as e:
         notif.message = str(e)
-        notif.retries = retries + 1
         db.session.commit()
         return False
 
     if not is_callback_accepted(r):
         notif.message = f"{r.status_code} {r.reason}"
-        notif.retries = retries + 1
         db.session.commit()
         return False
 
