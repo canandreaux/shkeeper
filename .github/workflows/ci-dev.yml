@@ -20,7 +20,7 @@ jobs:
           flavor: |
             latest=false
           images: |
-            vsyshost/shkeeper
+            ${{ github.repository_owner }}/shkeeper
           tags: |
             type=raw,value=dev-{{branch}}-{{sha}}
       -

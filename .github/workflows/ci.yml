@@ -66,7 +66,7 @@ jobs:
           flavor: |
             latest=false
           # list of Docker images to use as base name for tags
-          images: vsyshost/shkeeper
+          images: ${{ github.repository_owner }}/shkeeper
           # generate Docker tags based on the following events/attributes
           tags: |
             type=semver,pattern={{version}}
@@ -84,6 +84,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
 
   trigger-docs:
+    if: github.repository == 'vsys-host/shkeeper.io'
     runs-on: ubuntu-latest
     needs: docker
 
